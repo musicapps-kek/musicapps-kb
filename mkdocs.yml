@@ -7,7 +7,7 @@ repo_url: https://github.com/musicapps-kek/musicapps-kb
 repo_name: musicapps-kek/musicapps-kb
 
 theme:
-  name: material
+  name: zensical
   language: en
   palette:
     - scheme: default
