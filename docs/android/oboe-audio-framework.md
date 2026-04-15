@@ -1,13 +1,13 @@
 # Oboe Audio Framework
 
-Oboe is a C++ library from Google that gives Android apps low-latency, high-performance audio. It is the recommended way to implement professional-grade audio — such as a metronome — on Android.
+[Oboe](https://github.com/google/oboe) is a C++ library from Google that gives Android apps low-latency, high-performance audio. It is the recommended way to implement professional-grade audio — such as a metronome — on Android.
 
 ## Why Oboe?
 
 Android has had audio APIs for a long time, but they evolved in inconsistent ways across API levels and device manufacturers. Oboe solves two problems at once:
 
 **1. Automatic API selection**
-Oboe internally uses AAudio on Android 8.1 (API 27) and above. On older devices it falls back to OpenSL ES. You write your code once; Oboe picks the best available engine at runtime.
+Oboe internally uses [AAudio](https://developer.android.com/ndk/guides/audio/aaudio/aaudio) on Android 8.1 (API 27) and above. On older devices it falls back to [OpenSL ES](https://developer.android.com/ndk/guides/audio/opensl/opensl-for-android). You write your code once; Oboe picks the best available engine at runtime.
 
 ```mermaid
 graph TD
@@ -33,7 +33,7 @@ Getting truly low-latency audio on Android requires a specific combination of se
 
 ### AudioStreamBuilder
 
-`AudioStreamBuilder` is the entry point. You chain configuration calls on it and then call `openStream()`:
+[`AudioStreamBuilder`](https://google.github.io/oboe/reference/classoboe_1_1_audio_stream_builder.html) is the entry point. You chain configuration calls on it and then call `openStream()`:
 
 ```cpp
 AudioStreamBuilder builder;
@@ -56,7 +56,7 @@ Result result = builder.openStream(mStream);
 
 ### The data callback
 
-Instead of writing to a buffer yourself, you implement `AudioStreamDataCallback::onAudioReady`. Oboe calls this method from a high-priority audio thread whenever the hardware needs more samples:
+Instead of writing to a buffer yourself, you implement [`AudioStreamDataCallback::onAudioReady`](https://google.github.io/oboe/reference/classoboe_1_1_audio_stream_data_callback.html). Oboe calls this method from a high-priority audio thread whenever the hardware needs more samples:
 
 ```cpp
 DataCallbackResult onAudioReady(AudioStream *audioStream,
@@ -89,7 +89,7 @@ sequenceDiagram
 
 ### Error handling
 
-`AudioStreamErrorCallback::onErrorAfterClose` is called when the stream is closed unexpectedly — for example when the user unplugs headphones. You restart the stream here so audio switches to the new output device automatically:
+[`AudioStreamErrorCallback::onErrorAfterClose`](https://google.github.io/oboe/reference/classoboe_1_1_audio_stream_error_callback.html) is called when the stream is closed unexpectedly — for example when the user unplugs headphones. You restart the stream here so audio switches to the new output device automatically:
 
 ```cpp
 void onErrorAfterClose(AudioStream *stream, Result error) override {
@@ -110,7 +110,7 @@ Using the native rate avoids an internal resampler, which is a major source of a
 
 ## Why Oboe for a metronome?
 
-A metronome has one critical requirement: the interval between clicks must not vary. Standard Java/Kotlin threading (e.g. `Handler.postDelayed`) is subject to OS scheduler jitter — the thread can be delayed by tens of milliseconds on a loaded device, producing an audible tempo variation.
+A metronome has one critical requirement: the interval between clicks must not vary. Standard Java/Kotlin threading (e.g. [`Handler.postDelayed`](https://developer.android.com/reference/android/os/Handler#postDelayed(java.lang.Runnable,long))) is subject to OS scheduler jitter — the thread can be delayed by tens of milliseconds on a loaded device, producing an audible tempo variation.
 
 Oboe solves this by making timing a *counting problem* instead of a *scheduling problem*. The audio callback fires with a fixed block of frames. By counting frames inside the callback, the beat falls at exactly the right sample — immune to scheduler jitter, because the timing is embedded in the audio data itself.
 
@@ -155,7 +155,7 @@ target_link_libraries(audio-engine oboe::oboe log)
 
 ### C++ audio engine
 
-`AudioEngine.cpp` contains a class that extends both `AudioStreamDataCallback` and `AudioStreamErrorCallback`. The stream is opened with `LowLatency + Exclusive` mode at the device's native sample rate.
+`AudioEngine.cpp` contains a class that extends both [`AudioStreamDataCallback`](https://google.github.io/oboe/reference/classoboe_1_1_audio_stream_data_callback.html) and [`AudioStreamErrorCallback`](https://google.github.io/oboe/reference/classoboe_1_1_audio_stream_error_callback.html). The stream is opened with `LowLatency + Exclusive` mode at the device's native sample rate.
 
 **Click generation**
 
@@ -248,7 +248,7 @@ sequenceDiagram
 
 ### Kotlin wrapper and JNI bridge
 
-`AndroidAudioEngine.kt` is a thin Kotlin class that loads the native library and maps each method to a JNI call:
+`AndroidAudioEngine.kt` is a thin Kotlin class that loads the native library and maps each method to a [JNI](https://developer.android.com/training/articles/perf-jni) call:
 
 ```kotlin
 companion object {

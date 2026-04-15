@@ -1,6 +1,6 @@
 # Gradle in a KMP Project
 
-If you've built Android apps, you already know Gradle as the build system. In a KMP project, Gradle takes on a larger role — it manages not just the Android build, but also the compilation of shared Kotlin code and the integration with Xcode for iOS.
+If you've built Android apps, you already know [Gradle](https://gradle.org) as the build system. In a KMP project, Gradle takes on a larger role — it manages not just the Android build, but also the compilation of shared Kotlin code and the integration with Xcode for iOS.
 
 ## What Gradle does in a KMP project
 
@@ -90,7 +90,7 @@ You may also see KMP-specific flags here, like enabling the new Kotlin/Native me
 
 ## Version catalogs (libs.versions.toml)
 
-Modern KMP projects use a version catalog to centralise dependency versions:
+Modern KMP projects use a [version catalog](https://docs.gradle.org/current/userguide/version_catalogs.html) to centralise dependency versions:
 
 ```
 gradle/
@@ -126,3 +126,4 @@ Instead of hardcoding version strings in each `build.gradle.kts`, you reference 
 
 - [Gradle basics for Android — developer.android.com](https://developer.android.com/build)
 - [KMP Gradle DSL reference — kotlinlang.org](https://kotlinlang.org/docs/multiplatform-dsl-reference.html)
+- [Gradle version catalogs — docs.gradle.org](https://docs.gradle.org/current/userguide/version_catalogs.html)

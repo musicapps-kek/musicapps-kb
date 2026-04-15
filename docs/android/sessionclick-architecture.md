@@ -4,7 +4,7 @@ This article explains how the SessionClick Android app is structured: which comp
 
 ## Overview
 
-The app follows the **Single Activity + Compose** pattern. There are no fragments. The entire UI is Jetpack Compose. State management and audio playback are separated into distinct layers so that each can survive lifecycle events independently.
+The app follows the **Single Activity + Compose** pattern. There are no fragments. The entire UI is [Jetpack Compose](https://developer.android.com/jetpack/compose). State management and audio playback are separated into distinct layers so that each can survive lifecycle events independently.
 
 ```mermaid
 graph TD
@@ -24,7 +24,7 @@ graph TD
 
 `MainActivity` is the single entry point. Its only responsibilities are:
 
-- Setting `FLAG_KEEP_SCREEN_ON` so the display stays on while the metronome runs
+- Setting [`FLAG_KEEP_SCREEN_ON`](https://developer.android.com/reference/android/view/WindowManager.LayoutParams#FLAG_KEEP_SCREEN_ON) so the display stays on while the metronome runs
 - Enabling edge-to-edge UI
 - Calling `setContent { App() }` to hand off everything to Compose
 
@@ -32,7 +32,7 @@ It holds no data of its own. When it is destroyed (screen rotation, back press),
 
 ### AudioEngineViewModel
 
-`AudioEngineViewModel` extends `AndroidViewModel`, which means the Android framework keeps exactly one instance of it alive across configuration changes such as screen rotation. When `MainActivity` is recreated, Compose calls `viewModel()` and gets back the *same* instance.
+`AudioEngineViewModel` extends [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel), which means the Android framework keeps exactly one instance of it alive across configuration changes such as screen rotation. When `MainActivity` is recreated, Compose calls `viewModel()` and gets back the *same* instance.
 
 **What it holds:**
 
@@ -41,7 +41,7 @@ It holds no data of its own. When it is destroyed (screen rotation, back press),
 | `isPlaying` | `Boolean` (Compose state) | Whether the metronome is currently running |
 | `_bpm` | `Int` (Compose state) | The current tempo |
 | `metronomeService` | `MetronomeService?` | Reference to the bound service |
-| `connection` | `ServiceConnection` | Manages the service binding lifecycle |
+| `connection` | [`ServiceConnection`](https://developer.android.com/reference/android/content/ServiceConnection) | Manages the service binding lifecycle |
 
 **What it does NOT hold:** the audio engine itself. The ViewModel only holds the *binder reference* to the service. This is intentional — the ViewModel lives as long as the UI component, but audio should keep running even when the app goes to the background.
 
@@ -53,7 +53,7 @@ When `onCleared()` is called (the ViewModel is finally destroyed because the use
 
 ### MetronomeService
 
-`MetronomeService` is a foreground service. It runs independently of the Activity lifecycle and survives screen rotation, app backgrounding, and brief process interruptions.
+`MetronomeService` is a [foreground service](https://developer.android.com/develop/background-work/services/foreground-services). It runs independently of the Activity lifecycle and survives screen rotation, app backgrounding, and brief process interruptions.
 
 **What it holds:**
 
@@ -66,7 +66,7 @@ When `onCleared()` is called (the ViewModel is finally destroyed because the use
 
 Android can kill background services when memory is low. A *foreground* service is protected from this and must display a persistent notification to the user. `MetronomeService` shows a notification with the current BPM whenever the metronome is playing.
 
-When `startMetronome(bpm)` is called, the service calls `startForeground()` with a `FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK` flag (API 29+). When `stopMetronome()` is called, it removes the notification with `stopForeground(STOP_FOREGROUND_REMOVE)`.
+When `startMetronome(bpm)` is called, the service calls [`startForeground()`](https://developer.android.com/reference/android/app/Service#startForeground(int,android.app.Notification)) with a [`FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK`](https://developer.android.com/reference/android/content/pm/ServiceInfo#FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK) flag (API 29+). When `stopMetronome()` is called, it removes the notification with [`stopForeground(STOP_FOREGROUND_REMOVE)`](https://developer.android.com/reference/android/app/Service#stopForeground(int)).
 
 ### AndroidAudioEngine (JNI wrapper)
 
@@ -94,7 +94,7 @@ This is where the audio lives. The C++ `AudioEngine` class extends Oboe's `Audio
 
 The metronome's accuracy comes from counting audio frames, not from OS timers.
 
-**The problem with timers:** `Handler.postDelayed`, `coroutineScope`, and similar scheduling mechanisms are subject to OS scheduler jitter. On a loaded device, a scheduled callback can be delayed by 20–50 ms, producing a clearly audible rhythm variation.
+**The problem with timers:** [`Handler.postDelayed`](https://developer.android.com/reference/android/os/Handler#postDelayed(java.lang.Runnable,long)), `coroutineScope`, and similar scheduling mechanisms are subject to OS scheduler jitter. On a loaded device, a scheduled callback can be delayed by 20–50 ms, producing a clearly audible rhythm variation.
 
 **The solution:** frame counting inside the Oboe callback. The callback fires once per audio buffer (typically every 2–5 ms). Inside it, `mFrameIndex` increments by 1 for every audio sample rendered. When `mFrameIndex >= mFramesPerBeat`, a new beat starts. The formula:
 
@@ -137,7 +137,7 @@ flowchart TD
 
 Once the metronome is running, the UI needs to flash and vibrate on each beat. It does this by *polling the C++ timestamp* rather than running its own independent timer.
 
-In `App.kt`, a `LaunchedEffect` polls `getLastBeatNanos()` every 8 ms:
+In `App.kt`, a [`LaunchedEffect`](https://developer.android.com/reference/kotlin/androidx/compose/runtime/package-summary#LaunchedEffect(kotlin.Any,kotlin.coroutines.SuspendFunction1)) polls `getLastBeatNanos()` every 8 ms:
 
 ```kotlin
 LaunchedEffect(isPlaying) {
@@ -165,8 +165,8 @@ Screen rotation destroys and recreates `MainActivity`. Here is what each layer d
 | Layer | Survives rotation? | Why |
 |---|---|---|
 | `MainActivity` | No — recreated | Normal Android lifecycle |
-| Compose UI state (scroll position) | Yes — `rememberLazyListState` | Compose saves state across recompositions |
-| `AudioEngineViewModel` | Yes | `AndroidViewModel` is retained by the framework |
+| Compose UI state (scroll position) | Yes — [`rememberLazyListState`](https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/package-summary#rememberLazyListState(kotlin.Int,kotlin.Int)) | Compose saves state across recompositions |
+| `AudioEngineViewModel` | Yes | [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel) is retained by the framework |
 | `isPlaying`, `bpm` | Yes | Held in the ViewModel as Compose state |
 | `MetronomeService` | Yes | Runs independently, bound service reconnects automatically |
 | Audio playback | Yes — uninterrupted | The service continues running while rotation happens |

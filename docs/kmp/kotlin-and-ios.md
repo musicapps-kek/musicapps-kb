@@ -1,6 +1,6 @@
 # How Kotlin and iOS Work Together
 
-Kotlin is a JVM-based language — so how does it end up running on an iPhone? The answer is Kotlin/Native, a compiler backend that turns Kotlin code into native binaries without a JVM.
+Kotlin is a JVM-based language — so how does it end up running on an iPhone? The answer is [Kotlin/Native](https://kotlinlang.org/docs/native-overview.html), a compiler backend that turns Kotlin code into native binaries without a JVM.
 
 ## The compilation pipeline
 
@@ -54,9 +54,9 @@ The translation is mostly seamless for simple types. More complex Kotlin pattern
 
 ## Coroutines and Swift concurrency
 
-Kotlin coroutines (`suspend` functions) don't map directly to Swift's `async/await`. This is one of the more painful edges of KMP.
+Kotlin coroutines (`suspend` functions) don't map directly to Swift's [`async/await`](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency/). This is one of the more painful edges of KMP.
 
-The most common solution is **SKIE** (Swift Kotlin Interface Enhancer), a Gradle plugin that automatically wraps Kotlin coroutines so they appear as native Swift `async` functions:
+The most common solution is **[SKIE](https://skie.touchlab.co)** (Swift Kotlin Interface Enhancer), a Gradle plugin that automatically wraps Kotlin coroutines so they appear as native Swift `async` functions:
 
 ```kotlin
 // Kotlin (commonMain)
@@ -72,10 +72,10 @@ Without SKIE, you'd need to wrap coroutines manually in callbacks, which is tedi
 
 ## Calling Apple APIs from Kotlin (iosMain)
 
-In `iosMain`, you can call Apple's native frameworks directly from Kotlin. Kotlin/Native ships with bindings for the entire Apple SDK:
+In `iosMain`, you can call Apple's native frameworks directly from Kotlin. Kotlin/Native ships with bindings for the entire [Apple SDK](https://developer.apple.com/documentation/technologies):
 
 ```kotlin
-// iosMain
+// iosMain — AVAudioEngine: https://developer.apple.com/documentation/avfaudio/avaudioengine
 import platform.AVFAudio.AVAudioEngine
 import platform.Foundation.NSDate
 
@@ -87,7 +87,7 @@ Apple framework names and types keep their original names. It feels slightly for
 
 ## Memory management
 
-Older versions of Kotlin/Native used a strict ownership model that made sharing objects between threads painful. Since Kotlin 1.7.20, the **new memory manager** (now the default) uses a model much closer to the JVM — standard garbage collection, no strict thread ownership. This eliminates most of the old pain points.
+Older versions of Kotlin/Native used a strict ownership model that made sharing objects between threads painful. Since Kotlin 1.7.20, the [**new memory manager**](https://kotlinlang.org/docs/native-memory-manager.html) (now the default) uses a model much closer to the JVM — standard garbage collection, no strict thread ownership. This eliminates most of the old pain points.
 
 ## What this means for SessionClick
 
@@ -98,7 +98,7 @@ Older versions of Kotlin/Native used a strict ownership model that made sharing 
 | BPM / tick logic | `commonMain` | Same |
 | Audio engine | `iosMain` | Uses `AVAudioEngine` directly, compiled into framework |
 | SwiftUI views | `iosApp` (Swift only) | Calls shared framework via `import shared` |
-| StoreKit (IAP) | `iosApp` (Swift only) | Pure Swift, no Kotlin involved |
+| [StoreKit](https://developer.apple.com/documentation/storekit) (IAP) | `iosApp` (Swift only) | Pure Swift, no Kotlin involved |
 
 ## Further reading
 

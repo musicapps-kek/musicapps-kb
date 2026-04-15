@@ -1,8 +1,8 @@
 # What is Kotlin Multiplatform?
 
-Kotlin Multiplatform (KMP) lets you write shared Kotlin code that runs on multiple platforms — Android, iOS, desktop, web — while keeping platform-specific code where it belongs.
+[Kotlin Multiplatform (KMP)](https://kotlinlang.org/docs/multiplatform.html) lets you write shared Kotlin code that runs on multiple platforms — Android, iOS, desktop, web — while keeping platform-specific code where it belongs.
 
-It is **not** a cross-platform UI framework. You still write native UI on each platform (Jetpack Compose on Android, SwiftUI on iOS). KMP is about sharing the *logic* underneath the UI.
+It is **not** a cross-platform UI framework. You still write native UI on each platform ([Jetpack Compose](https://developer.android.com/jetpack/compose) on Android, [SwiftUI](https://developer.apple.com/documentation/swiftui) on iOS). KMP is about sharing the *logic* underneath the UI.
 
 ## The core idea
 
@@ -52,7 +52,7 @@ Shared code calls `currentTimeMillis()` without knowing which platform it's on. 
 ## What KMP is NOT
 
 - **Not Kotlin Multiplatform Mobile (KMM)** — KMM was the old name for the mobile-focused subset. It's now just called KMP.
-- **Not Compose Multiplatform** — that's a separate JetBrains project that shares UI across platforms using Compose. KMP shares logic; Compose Multiplatform shares UI. They can be combined, but they're distinct.
+- **Not [Compose Multiplatform](https://www.jetbrains.com/compose-multiplatform/)** — that's a separate JetBrains project that shares UI across platforms using Compose. KMP shares logic; Compose Multiplatform shares UI. They can be combined, but they're distinct.
 - **Not a replacement for native development** — you still need Xcode for iOS and Android Studio for Android. KMP reduces duplication, it doesn't eliminate platform work.
 
 ## What is shared in SessionClick
