@@ -52,6 +52,28 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000) — the site reloads automat
 
 ---
 
+## Mermaid diagrams
+
+Mermaid code fences are enabled in this project.
+
+Use standard fenced blocks in Markdown:
+
+````markdown
+```mermaid
+flowchart TD
+	A[Start] --> B[Build docs]
+```
+````
+
+````
+
+Notes:
+
+- Site rendering (Zensical/MkDocs): Mermaid is loaded via `mkdocs.yml`, so diagrams render in the built site and local `zensical serve` output.
+- VS Code editor preview: install the recommended workspace extension (`bierner.markdown-mermaid`) from `.vscode/extensions.json`.
+
+---
+
 ## Publish
 
 Push to the `main` branch. GitHub Actions builds and deploys automatically.
@@ -60,7 +82,7 @@ Push to the `main` branch. GitHub Actions builds and deploys automatically.
 git add .
 git commit -m "Add/update article: <topic>"
 git push
-```
+````
 
 Deployment takes ~1 minute. Published at [kb.musicapps.eu](https://kb.musicapps.eu).
 
