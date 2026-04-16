@@ -9,13 +9,18 @@ The app follows the **Single Activity + Compose** pattern. There are no fragment
 ```mermaid
 graph TD
     UI["<b>UI Layer</b><br/>Jetpack Compose — App() / AppContent()<br/>Reads Compose state · polls beat timestamps"]
-    VM["<b>ViewModel Layer</b><br/>AudioEngineViewModel<br/>Survives screen rotation"]
+    AVM["<b>AudioEngineViewModel</b><br/>isPlaying · bpm<br/>Survives screen rotation"]
+    SVM["<b>SessionViewModel</b><br/>Playlists · items · selectedIndex<br/>Survives screen rotation · persists to JSON"]
     SVC["<b>Service Layer</b><br/>MetronomeService — foreground service<br/>Survives Activity destruction"]
     NAT["<b>Native Audio Layer</b><br/>AudioEngine.cpp via Oboe<br/>Frame-accurate timing · hardware clock"]
+    FILE["<b>session.json</b><br/>Internal storage (filesDir)<br/>Written on every change"]
 
-    UI -->|"reads isPlaying, bpm<br/>calls start/stop/setBpm"| VM
-    VM -->|"binds to service<br/>delegates all audio calls"| SVC
+    UI -->|"reads isPlaying, bpm<br/>calls start/stop/setBpm"| AVM
+    UI -->|"reads playlists, items<br/>calls add/remove/update/move"| SVM
+    AVM -->|"binds to service<br/>delegates all audio calls"| SVC
     SVC -->|"owns AndroidAudioEngine<br/>JNI bridge"| NAT
+    SVM -->|"async write on every mutation"| FILE
+    FILE -->|"load on init"| SVM
 ```
 
 ## Components
@@ -32,7 +37,7 @@ It holds no data of its own. When it is destroyed (screen rotation, back press),
 
 ### AudioEngineViewModel
 
-`AudioEngineViewModel` extends [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel), which means the Android framework keeps exactly one instance of it alive across configuration changes such as screen rotation. When `MainActivity` is recreated, Compose calls `viewModel()` and gets back the *same* instance.
+`AudioEngineViewModel` extends [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel), which means the Android framework keeps exactly one instance of it alive across configuration changes such as screen rotation. It is responsible for audio state only — playlist data is handled separately by `SessionViewModel`. When `MainActivity` is recreated, Compose calls `viewModel()` and gets back the *same* instance.
 
 **What it holds:**
 
@@ -50,6 +55,29 @@ It holds no data of its own. When it is destroyed (screen rotation, back press),
 The ViewModel starts and binds to `MetronomeService` in its `init` block using `application.startService()` + `application.bindService()`. Starting the service explicitly (rather than relying only on binding) keeps it alive after the ViewModel unbinds on app close, until `stopService()` is explicitly called.
 
 When `onCleared()` is called (the ViewModel is finally destroyed because the user left the app), the service connection is unbound but the service continues running.
+
+### SessionViewModel
+
+`SessionViewModel` also extends `AndroidViewModel` (it needs `filesDir` for persistence). It owns all playlist and session data, completely separate from audio state.
+
+**What it holds:**
+
+| Field | Type | Purpose |
+|---|---|---|
+| `_playlists` | `SnapshotStateList<Playlist>` | All playlists (names + item snapshots) |
+| `activePlaylistId` | `String` (Compose state) | Which playlist is currently active |
+| `items` | `SnapshotStateList<PlaylistItem>` | Live mutable copy of the active playlist's items |
+| `selectedIndex` | `Int` (Compose state) | Which item is currently selected (drives the metronome BPM) |
+
+**Mutation operations:** `addItem`, `removeItem`, `restoreItem`, `updateItem`, `moveItem`, `switchPlaylist`, `createPlaylist`, `deletePlaylist`. Every operation calls `sync()` at the end, which writes the active items back into `_playlists` and triggers an async save.
+
+**Persistence:**
+
+Every mutation triggers an asynchronous write to `session.json` in `filesDir` via `viewModelScope.launch(Dispatchers.IO)`. The format is a JSON object with `activePlaylistId` and a `playlists` array. Each playlist contains its `id`, `name`, and `items` (with a `type` field to distinguish `song` from `special`).
+
+On init, `loadIfExists()` reads the file if present and restores all state. If the file doesn't exist (first launch) or fails to parse, the hardcoded default playlist is used as a fallback.
+
+No external library is used — Android's built-in `org.json` is sufficient for this structure.
 
 ### MetronomeService
 
@@ -167,7 +195,9 @@ Screen rotation destroys and recreates `MainActivity`. Here is what each layer d
 | `MainActivity` | No — recreated | Normal Android lifecycle |
 | Compose UI state (scroll position) | Yes — [`rememberLazyListState`](https://developer.android.com/reference/kotlin/androidx/compose/foundation/lazy/package-summary#rememberLazyListState(kotlin.Int,kotlin.Int)) | Compose saves state across recompositions |
 | `AudioEngineViewModel` | Yes | [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel) is retained by the framework |
-| `isPlaying`, `bpm` | Yes | Held in the ViewModel as Compose state |
+| `isPlaying`, `bpm` | Yes | Held in `AudioEngineViewModel` as Compose state |
+| `SessionViewModel` | Yes | `AndroidViewModel` is retained by the framework |
+| Playlists, items, `selectedIndex` | Yes | Held in `SessionViewModel` as Compose state |
 | `MetronomeService` | Yes | Runs independently, bound service reconnects automatically |
 | Audio playback | Yes — uninterrupted | The service continues running while rotation happens |
 | Native `AudioEngine` | Yes | Owned by the service, never destroyed during rotation |
@@ -206,10 +236,15 @@ sequenceDiagram
 
 ## What does NOT survive process death
 
-If Android kills the process entirely (rare, but possible under extreme memory pressure), everything is lost:
+If Android kills the process entirely (rare, but possible under extreme memory pressure), the following is lost:
 
-- ViewModel state (`isPlaying`, `bpm`)
-- Service (and therefore audio)
-- Selected playlist item (held as local Compose state, not persisted)
+- `AudioEngineViewModel` state (`isPlaying`, `bpm`)
+- `MetronomeService` and therefore audio playback
+- Any in-flight UI state (open sheets, dialogs)
 
-On relaunch the app starts fresh. The hardcoded playlist is always available; there is no user data to restore.
+The following **is** restored on relaunch:
+
+- All playlists, songs, and special entries — read from `session.json` in `filesDir` by `SessionViewModel.loadIfExists()` on init
+- The previously active playlist
+
+On relaunch the metronome is stopped and the app is in its initial visual state, but all user data (playlists, songs, order, BPM values) is intact.
