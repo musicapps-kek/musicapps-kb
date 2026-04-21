@@ -2,26 +2,49 @@
 
 This article explains how SessionClick is structured: which components exist, what data each one holds, how audio timing is kept constant, how the app survives screen rotation, and how the architecture is split between a shared [Kotlin Multiplatform](https://kotlinlang.org/docs/multiplatform.html) module and Android-specific code.
 
+## Key versions
+
+| Library | Version |
+|---|---|
+| Kotlin | 2.3.20 |
+| Compose Multiplatform | 1.7.3 |
+| kotlinx-serialization | 1.7.3 |
+| Oboe | 1.10.0 |
+| Google Play Billing (billing-ktx) | 7.1.1 |
+| sh.calvin.reorderable | 3.0.0 |
+| AboutLibraries | 11.2.3 |
+| Min SDK | 28 (Android 9) |
+| Target/Compile SDK | 36 |
+
 ## Overview
 
 The app follows the **Single Activity + Compose** pattern. There are no fragments. The entire UI is [Jetpack Compose](https://developer.android.com/jetpack/compose). State management, persistence, and audio playback are separated into distinct layers so that each can evolve independently and survive lifecycle events.
 
-The data layer is split across two modules. Pure domain logic (mutations, validation, the song pool model, schema migration) lives in `shared/commonMain` and will be reused by the iOS app. Android-specific concerns (Compose-observable state, UUID generation, file I/O, Service binding) live in `composeApp/androidMain`.
+The data layer is split across two modules. Pure domain logic (mutations, validation, the song pool model, serialization, freemium rules, schema migration) lives in `shared/commonMain` and will be reused by the iOS app. Android-specific concerns (Compose-observable state, UUID generation, file I/O implementation, Service binding, Play Billing) live in `composeApp/androidMain`.
 
 ```mermaid
 graph TD
     subgraph Shared["shared/commonMain — pure Kotlin, no platform APIs"]
         MODELS["<b>Data models</b><br/>Song · Playlist · PlaylistItem"]
-        STATE["<b>SessionState</b><br/>Mutation logic · selectedIndex rules<br/>Song pool · onChange callback"]
+        STATE["<b>SessionState</b><br/>Mutation logic · selectedIndex rules<br/>Song pool · isDarkMode · onChange callback"]
         SEED["<b>SessionSeed</b><br/>Default seven-song setlist"]
         MIG["<b>Migration</b><br/>v1 → v2 schema conversion"]
+        REPO["<b>SessionRepository</b><br/>kotlinx.serialization<br/>encode / decode / save / load"]
+        FSINT["<b>FileStorage interface</b><br/>read / write contract"]
+        FREECONF["<b>FreemiumConfig</b><br/>MAX_FREE_SONGS = 30<br/>MAX_FREE_PLAYLISTS = 3"]
+        FREEGATE["<b>FreemiumGate</b><br/>canAddSong · canAddPlaylist"]
         ENG["<b>AudioEngine interface</b>"]
     end
 
+    subgraph SharedAndroid["shared/androidMain — platform implementations"]
+        FSAND["<b>AndroidFileStorage</b><br/>reads / writes filesDir"]
+    end
+
     subgraph Android["composeApp/androidMain — Android-specific adapters"]
-        UI["<b>UI Layer</b><br/>Jetpack Compose — App() / AppContent()<br/>Reads Compose state · polls beat timestamps"]
+        UI["<b>UI Layer</b><br/>App() / AppContent()<br/>+ SongEditorSheet · SpecialEntryEditorSheet<br/>+ PlaylistSwitcherSheet · SongLibraryScreen<br/>+ LicensesScreen"]
         SVM["<b>SessionViewModel</b><br/>Thin adapter over SessionState<br/>Compose shadows · UUIDs · persistence"]
         AVM["<b>AudioEngineViewModel</b><br/>isPlaying · bpm · service binding"]
+        BILLING["<b>BillingManager</b><br/>Play Billing · isUnlocked StateFlow<br/>premium_unlock product"]
         SVC["<b>MetronomeService</b><br/>Foreground service · survives Activity destruction"]
         NAT["<b>AudioEngine.cpp via Oboe</b><br/>Frame-accurate timing · hardware clock"]
         FILE["<b>session.json</b><br/>Internal storage (filesDir)"]
@@ -29,15 +52,19 @@ graph TD
 
     SVM -->|"owns, delegates mutations"| STATE
     SVM -->|"seeds from"| SEED
-    SVM -->|"migrates via"| MIG
+    SVM -->|"save/load via"| REPO
+    REPO -->|"migrates via"| MIG
+    REPO -->|"reads/writes via"| FSINT
+    FSAND -.implements.- FSINT
+    FSAND -->|"reads/writes"| FILE
     STATE -.uses.- MODELS
+    FREEGATE -.uses.- FREECONF
     UI -->|"reads displayItems, songs, playlists<br/>calls add/remove/update/move"| SVM
     UI -->|"reads isPlaying, bpm<br/>calls start/stop/setBpm"| AVM
+    UI -->|"reads isUnlocked<br/>calls startPurchase"| BILLING
     AVM -->|"binds to service"| SVC
     SVC -->|"owns AndroidAudioEngine<br/>JNI bridge"| NAT
     NAT -.implements.- ENG
-    SVM -->|"async write on every onChange"| FILE
-    FILE -->|"load on init"| SVM
 ```
 
 ## Shared KMP layer (`shared/commonMain`)
@@ -95,6 +122,7 @@ The trade-off: a song has one canonical BPM. If the user wants "Autumn Leaves at
 | `playlists` | `List<Playlist>` | All playlists |
 | `activePlaylistId` | `String` | Which playlist is currently active |
 | `selectedIndex` | `Int` | Which item in the active playlist is selected |
+| `isDarkMode` | `Boolean` | User's dark/light mode preference; persisted with session |
 | `items` | `List<PlaylistItem>` | Convenience: items of the active playlist |
 | `onChange` | `(() -> Unit)?` | Callback fired after every mutation |
 
@@ -103,7 +131,8 @@ The trade-off: a song has one canonical BPM. If the user wants "Autumn Leaves at
 - Item operations: `selectItem`, `addItem`, `addItems` (bulk, single notification), `removeItem`, `restoreItem`, `updateItem`, `moveItem`.
 - Playlist operations: `switchPlaylist`, `createPlaylist` (auto-switches to the new one), `deletePlaylist` (refuses if only one remains).
 - Pool operations: `addSong`, `createSongAndAdd` (adds pool entry and inserts `SongRef`), `updateSong`, `deleteSongFromPool` (cascade — removes pool entry and every reference in every playlist).
-- Bulk load: `replaceAll` (used after loading JSON on startup).
+- Bulk load: `replaceAll` (used after loading JSON on startup or on import).
+- Theme: `toggleDarkMode` (flips `isDarkMode` and fires `onChange`).
 
 Every mutation fires `onChange` exactly once, including bulk operations. No-ops (unknown IDs, same-index moves) do not fire.
 
@@ -115,7 +144,69 @@ Provides the default session state on first install: seven seeded songs and one 
 
 ### Migration
 
-`Migration.migrateV1ToV2(legacyPlaylists)` is a pure function that converts the old inline-song format to the pool + reference format. Dedup key: `title.trim().lowercase() + "|" + bpm`. Preserves per-instance IDs from the legacy data. Called from `SessionViewModel.loadIfExists()` when a device has a pre-pool `session.json` file. Has its own tests in `commonTest/MigrationTest.kt`.
+`Migration.migrateV1ToV2(legacyPlaylists)` is a pure function that converts the old inline-song format to the pool + reference format. Dedup key: `title.trim().lowercase() + "|" + bpm`. Preserves per-instance IDs from the legacy data. Called from `SessionRepository.decode()` when a device has a pre-pool `session.json` file. Has its own tests in `commonTest/MigrationTest.kt`.
+
+### SessionRepository
+
+`SessionRepository` is the persistence layer. It encapsulates all JSON serialization (via `kotlinx.serialization`) and delegates raw file I/O to a `FileStorage` instance. This separation means the serialization logic is platform-agnostic and lives in `commonMain`, while Android-specific file access is plugged in at construction time.
+
+For full details, see the dedicated [Session Repository & Persistence](session-repository.md) article.
+
+**Public API:**
+
+| Method | Purpose |
+|---|---|
+| `encode(snapshot)` | Serializes a `SessionSnapshot` to a JSON string (schema v2) |
+| `decode(text)` | Parses a JSON string; handles v1→v2 migration transparently |
+| `save(snapshot)` | Encodes and writes `session.json` via `FileStorage` |
+| `load()` | Reads and decodes `session.json`; returns `null` if absent or unparseable |
+
+`SessionSnapshot` is the public data class that `SessionRepository` speaks in — it contains all fields needed to restore session state:
+
+```kotlin
+data class SessionSnapshot(
+    val songs: List<Song>,
+    val playlists: List<Playlist>,
+    val activePlaylistId: String,
+    val selectedIndex: Int = 0,
+    val isDarkMode: Boolean = true
+)
+```
+
+### FileStorage interface
+
+```kotlin
+interface FileStorage {
+    fun read(filename: String): String?
+    fun write(filename: String, text: String)
+}
+```
+
+The interface lives in `commonMain`. `AndroidFileStorage` (in `shared/androidMain`) implements it by reading and writing to `filesDir`. The iOS stub (`IosFileStorage` in `shared/iosMain`) will provide the iOS equivalent when the iOS app is built.
+
+This design means `SessionRepository` never touches a platform API directly.
+
+### FreemiumConfig and FreemiumGate
+
+`FreemiumConfig` is a constants object:
+
+```kotlin
+object FreemiumConfig {
+    const val MAX_FREE_SONGS = 30
+    const val MAX_FREE_PLAYLISTS = 3
+}
+```
+
+`FreemiumGate` is a stateless gate — the UI calls it before allowing a new song or playlist to be created:
+
+```kotlin
+object FreemiumGate {
+    fun canAddSong(currentSongCount: Int, isUnlocked: Boolean): Boolean
+    fun canAddPlaylist(currentPlaylistCount: Int, isUnlocked: Boolean): Boolean
+}
+```
+
+Both live in `commonMain`. When the iOS app is built, it will use the same constants and rules without any changes.
 
 ### AudioEngine interface
 
@@ -135,23 +226,25 @@ It holds no data of its own. When it is destroyed (screen rotation, back press),
 
 ### SessionViewModel
 
-`SessionViewModel` extends [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel) (it needs `filesDir` for persistence). It is a thin adapter over `SessionState` — it does not own any domain logic. Its job is to:
+`SessionViewModel` extends [`AndroidViewModel`](https://developer.android.com/reference/androidx/lifecycle/AndroidViewModel) (it needs `filesDir` to construct `AndroidFileStorage`). It is a thin adapter over `SessionState` — it does not own any domain logic. Its job is to:
 
 - Hold a `SessionState` instance as the source of truth.
 - Maintain [Compose-observable](https://developer.android.com/develop/ui/compose/state) shadows of the state's fields so the UI can recompose when they change.
 - Generate Android-specific values (UUIDs via `java.util.UUID`, timestamps via `System.currentTimeMillis()`) and pass them into `SessionState` mutations.
-- Subscribe to `state.onChange` to trigger Compose sync and async persistence on every mutation.
+- Subscribe to `state.onChange` to trigger Compose sync and async persistence on every mutation via `SessionRepository`.
 
 **What it holds:**
 
 | Field | Type | Purpose |
 |---|---|---|
 | `state` | `SessionState` | Domain source of truth (private) |
+| `repository` | `SessionRepository` | Persistence (private) |
 | `_items` | `SnapshotStateList<PlaylistItem>` | Compose shadow of `state.items` |
 | `_songs` | `SnapshotStateList<Song>` | Compose shadow of `state.songs` |
 | `_playlists` | `SnapshotStateList<Playlist>` | Compose shadow of `state.playlists` |
 | `activePlaylistId` | `String` (Compose state) | Which playlist is active |
 | `selectedIndex` | `Int` (Compose state) | Which item is selected |
+| `isDarkMode` | `Boolean` (Compose state) | Theme; shadowed from `state.isDarkMode` |
 | `displayItems` | `List<DisplayItem>` (computed) | Resolves each `SongRef` to its pool `Song` for rendering |
 
 `DisplayItem` is a sealed class with `SongView(instanceId, song)` and `SpecialView(instanceId, label)` variants. The UI iterates `displayItems` instead of raw `items` so it never has to perform pool lookups itself.
@@ -161,40 +254,32 @@ It holds no data of its own. When it is destroyed (screen rotation, back press),
 ```kotlin
 init {
     state.onChange = {
-        syncFromState()  // copies state fields into Compose shadows
-        saveAsync()      // writes JSON to filesDir
+        syncFromState()                          // copies state fields into Compose shadows
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                repository.save(SessionSnapshot( // writes session.json via SessionRepository
+                    songs = state.songs,
+                    playlists = state.playlists,
+                    activePlaylistId = state.activePlaylistId,
+                    selectedIndex = state.selectedIndex,
+                    isDarkMode = isDarkMode
+                ))
+            }
+        }
     }
-    loadIfExists()       // triggers state.replaceAll(...) if a session.json exists
-    syncFromState()      // runs once in case no file existed
+    repository.load()?.let { snap ->            // reads session.json on startup
+        state.replaceAll(snap.songs, snap.playlists,
+            snap.activePlaylistId, snap.selectedIndex, snap.isDarkMode)
+    }
+    syncFromState()
 }
 ```
 
 Every public mutation method on the ViewModel is a one-liner that delegates to `state`. UUID/timestamp-generating methods (`createPlaylist`, `createSongAndAdd`, `updateSong`) build the required values on the Android side before delegating.
 
-**Persistence:**
+**Export and import:**
 
-`session.json` lives in `filesDir`. Schema v2 format:
-
-```json
-{
-  "schemaVersion": 2,
-  "activePlaylistId": "...",
-  "songs": [ { "id", "title", "subtitle", "bpm", "lastEdited" }, ... ],
-  "playlists": [
-    {
-      "id", "name",
-      "items": [
-        { "type": "songRef", "id": "...", "songId": "..." },
-        { "type": "special",  "id": "...", "label": "..." }
-      ]
-    }
-  ]
-}
-```
-
-On init, `loadIfExists()` reads the file. If `schemaVersion` is absent or 1, it parses the legacy format, calls `Migration.migrateV1ToV2`, and writes v2 back immediately. If the file is missing or unparseable, `SessionSeed.defaultState()` is used as the fallback.
-
-Serialization uses Android's built-in [`org.json`](https://developer.android.com/reference/org/json/JSONObject). This is Android-only; a planned refactor will replace it with [`kotlinx.serialization`](https://kotlinlang.org/docs/serialization.html) and `expect`/`actual` file I/O so persistence can move into `shared/commonMain` for iOS.
+`SessionViewModel` also exposes `exportJson()` and `decodeImport()` / `importSnapshot()` for the user-facing backup/restore feature. These delegate directly to `SessionRepository.encode()` and `SessionRepository.decode()`.
 
 ### AudioEngineViewModel
 
@@ -216,6 +301,21 @@ Serialization uses Android's built-in [`org.json`](https://developer.android.com
 The ViewModel starts and binds to `MetronomeService` in its `init` block using `application.startService()` + `application.bindService()`. Starting the service explicitly (rather than relying only on binding) keeps it alive after the ViewModel unbinds on app close, until `stopService()` is explicitly called.
 
 When `onCleared()` is called (the ViewModel is finally destroyed because the user left the app), the service connection is unbound but the service continues running.
+
+### BillingManager
+
+`BillingManager` wraps [Google Play Billing](https://developer.android.com/google/play/billing) and exposes a single `isUnlocked: StateFlow<Boolean>` to the UI.
+
+**Responsibilities:**
+
+- Connects to the Play Billing service on `initialize()`.
+- Calls `queryPurchasesAsync` on connection to restore a previous purchase across reinstalls — if `premium_unlock` is found in the PURCHASED state, `isUnlocked` is set to `true` immediately.
+- Handles new purchases via `PurchasesUpdatedListener` and acknowledges them.
+- Exposes `startPurchase(activity)` to launch the billing flow from the UI.
+
+**Product:** `premium_unlock` (one-time in-app purchase, €2).
+
+The UI reads `isUnlocked` from `BillingManager` via `collectAsState()`. The freemium gate (`FreemiumGate` in `commonMain`) is checked in the UI before allowing new songs or playlists to be created. If `canAddSong` / `canAddPlaylist` returns `false`, the upsell dialog is shown and `startPurchase` is called.
 
 ### MetronomeService
 
@@ -336,7 +436,7 @@ Screen rotation destroys and recreates `MainActivity`. Here is what each layer d
 | `isPlaying`, `bpm` | Yes | Held in `AudioEngineViewModel` as Compose state |
 | `SessionViewModel` | Yes | `AndroidViewModel` is retained by the framework |
 | `SessionState` | Yes | Held inside `SessionViewModel` |
-| Song pool, playlists, `selectedIndex` | Yes | All live in `SessionState`, shadowed into Compose state |
+| Song pool, playlists, `selectedIndex`, `isDarkMode` | Yes | All live in `SessionState`, shadowed into Compose state |
 | `MetronomeService` | Yes | Runs independently, bound service reconnects automatically |
 | Audio playback | Yes — uninterrupted | The service continues running while rotation happens |
 | Native `AudioEngine` | Yes | Owned by the service, never destroyed during rotation |
@@ -383,12 +483,14 @@ If Android kills the process entirely (rare, but possible under extreme memory p
 
 The following **is** restored on relaunch:
 
-- Entire `SessionState` — song pool, playlists, special entries, active playlist — read from `session.json` by `SessionViewModel.loadIfExists()` on init
+- Entire `SessionState` — song pool, playlists, special entries, active playlist, `selectedIndex`, `isDarkMode` — read from `session.json` by `SessionRepository.load()` on ViewModel init
 - If the stored file is schema v1, it is migrated to v2 and rewritten silently
 
 On relaunch the metronome is stopped and the app is in its initial visual state, but all user data is intact.
 
 ## Related articles
 
+- [Session Repository & Persistence](session-repository.md) — `SessionRepository`, `FileStorage`, `SessionSnapshot`, and the JSON schema in detail
 - [Android Testing](android-testing.md) — how `SessionState` and `Migration` are tested in `commonTest`
 - [What is Kotlin Multiplatform?](../kmp/what-is-kmp.md) — source sets, `expect` / `actual`, shared-code mechanics
+- [AI-Assisted Development Workflow](../tools/ai-workflow.md) — how Claude Code and Gemini Code Assist are used together

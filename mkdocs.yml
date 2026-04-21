@@ -60,6 +60,8 @@ nav:
       - Android vs iOS — Concepts & Terminology: android/android-vs-ios-concepts.md
       - Oboe Audio Framework: android/oboe-audio-framework.md
       - SessionClick App Architecture: android/sessionclick-architecture.md
+      - Session Repository & Persistence: android/session-repository.md
       - Android Testing: android/android-testing.md
   - Tools:
-      - index: tools/index.md
+      - Overview: tools/index.md
+      - AI-Assisted Development Workflow: tools/ai-workflow.md
